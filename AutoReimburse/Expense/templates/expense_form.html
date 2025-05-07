@@ -1,0 +1,56 @@
+<!-- templates/expense_form.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Add Expense</title>
+</head>
+<body>
+    <h2>Submit Expense</h2>
+    <form method="POST" enctype="multipart/form-data">
+        {% csrf_token %}
+
+        <label for="category">Expense Category:</label>
+        <select name="category" required>
+            {% for cat in categories %}
+                <option value="{{ cat.id }}">{{ cat.category_name }}</option>
+            {% endfor %}
+        </select><br><br>
+
+        <label for="project">Project (optional):</label>
+        <select name="project">
+            <option value="">-- None --</option>
+            {% for proj in projects %}
+                <option value="{{ proj.id }}">{{ proj.project_name }}</option>
+            {% endfor %}
+        </select><br><br>
+
+        <label for="client">Client (optional):</label>
+        <select name="client">
+            <option value="">-- None --</option>
+            {% for cl in clients %}
+                <option value="{{ cl.id }}">{{ cl.client_name }}</option>
+            {% endfor %}
+        </select><br><br>
+
+        <label for="document">Upload Receipt:</label>
+        <input type="file" name="document" accept="image/*" required><br><br>
+
+        <label for="amount">Amount (optional):</label>
+        <input type="number" name="amount" step="0.01"><br><br>
+
+        <label for="description">Description:</label>
+        <textarea name="description" rows="3" cols="40"></textarea><br><br>
+
+        <label for="payment_method">Payment Method:</label>
+        <select name="payment_method" required>
+            <option value="">-- Select --</option>
+            <option value="Cash">Cash</option>
+            <option value="UPI">UPI</option>
+            <option value="PersonalCard">Personal Card</option>
+            <option value="CompanyCard">Company Card</option>
+        </select><br><br>
+
+        <button type="submit">Submit Expense</button>
+    </form>
+</body>
+</html>
