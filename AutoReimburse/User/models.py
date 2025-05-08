@@ -1,4 +1,5 @@
 from django.db import models
+import bcrypt
 from django.utils import timezone
 
 class User(models.Model):
@@ -17,6 +18,16 @@ class User(models.Model):
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
     is_active = models.BooleanField(default=True)
+
+    def save(self, *args, **kwargs):
+        # Hash the password only if it's a new object or password has changed
+        if not self.pk or 'password_hash' in self.get_dirty_fields():
+            if not self.password_hash.startswith('$2b$'):  # basic check for bcrypt
+                self.password_hash = bcrypt.hashpw(
+                    self.password_hash.encode('utf-8'),
+                    bcrypt.gensalt()
+                ).decode('utf-8')
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.username} ({self.user_type})"
@@ -96,3 +107,15 @@ class Project(models.Model):
     def __str__(self):
         return self.project_name
 
+class EmployeeProject(models.Model):
+    employee = models.ForeignKey(Employee, on_delete=models.CASCADE, related_name='project_assignments')
+    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name='employee_assignments')
+    assigned_date = models.DateField(auto_now_add=True)
+    is_active = models.BooleanField(default=True)
+    role = models.CharField(max_length=100, blank=True, null=True)
+    
+    class Meta:
+        unique_together = ('employee', 'project')  # Each employee-project combination should be unique
+        
+    def __str__(self):
+        return f"{self.employee.user.username} - {self.project.project_name}"
