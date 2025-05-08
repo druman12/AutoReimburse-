@@ -156,7 +156,20 @@ from .models import ExpenseCategory  # Import your category model
 CATEGORY_KEYWORDS = {
     'Food': ['food', 'restaurant', 'snack', 'lunch', 'dinner', 'meal'],
     'Travelling': ['travel', 'taxi', 'flight', 'bus', 'cab', 'uber', 'ola'],
-    'Hotel': ['hotel', 'stay', 'inn', 'lodging', 'accommodation', 'resort']
+    'Hotel': ['hotel', 'stay', 'inn', 'lodging', 'accommodation', 'resort'],
+     'Office Software P': [
+        'software', 'license', 'subscription', 'adobe', 'microsoft', 'office', 
+        'windows', 'photoshop', 'illustrator', 'indesign', 'acrobat', 'creative cloud',
+        'microsoft 365', 'office 365', 'word', 'excel', 'powerpoint', 'outlook',
+        'visual studio', 'github', 'gitlab', 'bitbucket', 'atlassian', 'jira',
+        'confluence', 'slack', 'zoom', 'teams', 'aws', 'azure', 'google cloud',
+        'digital purchase', 'app store', 'play store', 'software renewal',
+        'antivirus', 'security software', 'norton', 'mcafee', 'kaspersky',
+        'autodesk', 'autocad', 'revit', 'maya', '3ds max', 'fusion 360',
+        'quickbooks', 'sage', 'xero', 'accounting software', 'tax software',
+        'turbotax', 'intuit', 'tableau', 'power bi', 'data visualization',
+        'saas', 'paas', 'iaas', 'cloud service', 'digital service'
+    ]
 }
 
 def extract_category_from_text(ocr_text):
@@ -164,6 +177,21 @@ def extract_category_from_text(ocr_text):
     best_match = None
     highest_match_count = 0
 
+    # First check for software-specific indicators
+    if is_software_purchase(text_lower):
+        try:
+            return ExpenseCategory.objects.get(category_name__iexact='Office Software P')
+        except ExpenseCategory.DoesNotExist:
+            # Create the category if it doesn't exist
+            try:
+                return ExpenseCategory.objects.create(
+                    category_name='Office Software P',
+                    description='Software purchases and subscriptions'
+                )
+            except:
+                pass
+
+    # Then check other categories
     for category, keywords in CATEGORY_KEYWORDS.items():
         count = sum(keyword in text_lower for keyword in keywords)
         if count > highest_match_count:
@@ -178,7 +206,34 @@ def extract_category_from_text(ocr_text):
 
     return None
 
-
+def is_software_purchase(text_lower):
+    """
+    Specialized function to detect software purchases based on common patterns
+    """
+    # Check for software-specific keywords
+    software_keywords = CATEGORY_KEYWORDS['Office Software P']
+    keyword_matches = sum(keyword in text_lower for keyword in software_keywords)
+    
+    # Check for common software purchase patterns
+    patterns = [
+        r'license\s+(key|code|number|agreement)',
+        r'software\s+(purchase|license|subscription)',
+        r'digital\s+(download|product|purchase)',
+        r'subscription\s+(renewal|fee|charge)',
+        r'app\s+purchase',
+        r'(monthly|annual|yearly)\s+subscription',
+        r'(one-time|recurring)\s+purchase',
+        r'activation\s+code',
+        r'product\s+key',
+        r'download\s+link',
+        r'cloud\s+storage',
+        r'online\s+service'
+    ]
+    
+    pattern_matches = sum(bool(re.search(pattern, text_lower)) for pattern in patterns)
+    
+    # If we have multiple keyword matches or pattern matches, it's likely a software purchase
+    return keyword_matches >= 2 or pattern_matches >= 1 or (keyword_matches >= 1 and pattern_matches >= 1)
 
 def extract_location(text):
     lines = [line.strip() for line in text.split('\n') if line.strip()]
@@ -195,6 +250,7 @@ def extract_location(text):
             return combined
 
     return None
+
 
 
 def extract_from_expense_document(request, expense_id):
@@ -218,7 +274,24 @@ def extract_from_expense_document(request, expense_id):
         merchant = extract_merchant_name(ocr_text)
         date = extract_date(ocr_text)
         extracted_category = extract_category_from_text(ocr_text)
-        location = extract_location(ocr_text)  # NEW
+        location = extract_location(ocr_text)
+
+        # Check specifically for software purchase
+        is_software = is_software_purchase(ocr_text.lower())
+        if is_software:
+            try:
+                software_category = ExpenseCategory.objects.get(category_name__iexact='Office Software P')
+                extracted_category = software_category
+            except ExpenseCategory.DoesNotExist:
+                # Create the category if it doesn't exist
+                try:
+                    software_category = ExpenseCategory.objects.create(
+                        category_name='Office Software P',
+                        description='Software purchases and subscriptions'
+                    )
+                    extracted_category = software_category
+                except Exception as e:
+                    print(f"Error creating software category: {str(e)}")
 
         # Update or create MLExtractionResult
         result, created = MLExtractionResult.objects.get_or_create(
@@ -230,6 +303,7 @@ def extract_from_expense_document(request, expense_id):
                 'extracted_merchant': merchant,
                 'extracted_category': extracted_category,
                 'extracted_merchant_location': location,
+                'is_software_purchase': is_software,  # Add this field to your model
             }
         )
 
@@ -239,9 +313,10 @@ def extract_from_expense_document(request, expense_id):
             result.extracted_merchant = merchant
             result.extracted_category = extracted_category
             result.extracted_merchant_location = location
+            result.is_software_purchase = is_software  # Add this field to your model
             result.save()
 
-        # 🟢 Update Expense with non-null fields from MLExtractionResult
+        # Update Expense with non-null fields from MLExtractionResult
         updated = False
         if result.extracted_amount is not None:
             expense.amount = result.extracted_amount
@@ -271,6 +346,7 @@ def extract_from_expense_document(request, expense_id):
             'extracted_merchant': merchant,
             'extracted_category': str(extracted_category) if extracted_category else None,
             'merchant_location': location,
+            'is_software_purchase': is_software,  # Include in response
         })
 
     except Expense.DoesNotExist:
@@ -380,3 +456,106 @@ def expense_api(request, expense_id=None):
 
     else:
         return JsonResponse({"error": "Method not allowed"}, status=405)
+
+from django.http import JsonResponse
+from django.db.models import Sum, F, ExpressionWrapper, DecimalField, Value, Case, When
+from django.db.models.functions import Coalesce
+from decimal import Decimal
+
+from .models import Expense, ExpenseCategory
+
+def expense_statistics(request):
+    """
+    Calculate and return statistics about expenses:
+    1. Total expenses per project
+    2. Total expenses per category
+    3. Percentage of budget used for each category
+    """
+    # Calculate total expenses per project
+    project_expenses = Expense.objects.filter(
+        project__isnull=False, 
+        status='Approved'  # Only count approved expenses
+    ).values(
+        'project__id', 
+        'project__project_name'
+    ).annotate(
+        total_expense=Coalesce(Sum('amount'), Decimal('0.00'))
+    ).order_by('-total_expense')
+    
+    # Calculate total expenses per category
+    category_expenses = Expense.objects.filter(
+        status='Approved'  # Only count approved expenses
+    ).values(
+        'category__id', 
+        'category__category_name'
+    ).annotate(
+        total_expense=Coalesce(Sum('amount'), Decimal('0.00'))
+    ).order_by('-total_expense')
+    
+    # Get all expense categories with budget limits
+    categories = ExpenseCategory.objects.all().values(
+        'id', 
+        'category_name', 
+        'budget_limit'
+    )
+    
+    # Create a dictionary to store category budget usage
+    category_budget_usage = {}
+    
+    # Calculate percentage of budget used for each category
+    for category in categories:
+        category_id = category['id']
+        budget_limit = category['budget_limit'] or Decimal('0.00')
+        
+        # Find the corresponding expense for this category
+        category_expense = next(
+            (item for item in category_expenses if item['category__id'] == category_id), 
+            {'total_expense': Decimal('0.00')}
+        )
+        
+        total_expense = category_expense['total_expense']
+        
+        # Calculate percentage of budget used (avoid division by zero)
+        percentage_used = 0
+        if budget_limit > 0:
+            percentage_used = (total_expense / budget_limit) * 100
+        
+        # Store category budget usage info
+        category_budget_usage[category_id] = {
+            'category_name': category['category_name'],
+            'budget_limit': float(budget_limit),
+            'total_expense': float(total_expense),
+            'percentage_used': round(float(percentage_used), 2),
+            'status': 'Over Budget' if percentage_used > 100 else 'Within Budget'
+        }
+    
+    # Calculate overall total expense
+    total_expense = Expense.objects.filter(
+        status='Approved'
+    ).aggregate(
+        total=Coalesce(Sum('amount'), Decimal('0.00'))
+    )['total']
+    
+    # Prepare response data
+    response_data = {
+        'total_expense': float(total_expense),
+        'project_expenses': [
+            {
+                'project_id': item['project__id'],
+                'project_project_name': item['project__project_name'],
+                'total_expense': float(item['total_expense'])
+            } 
+            for item in project_expenses
+        ],
+        'category_expenses': [
+            {
+                'category_id': item['category__id'],
+                'category_name': item['category__category_name'],
+                'total_expense': float(item['total_expense'])
+            }
+            for item in category_expenses
+        ],
+        'category_budget_usage': list(category_budget_usage.values())
+    }
+    
+    return JsonResponse(response_data)
